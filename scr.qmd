@@ -1,0 +1,638 @@
+---
+title: "DA2"
+format: 
+  html:
+    toc: true
+    embed-resources: true
+    code-fold: true
+    code-line-numbers: true
+    code-summary: "SHOW ME THE CODE!"
+    code-tools: true
+editor: visual
+---
+
+```{r setup}
+#| message: false
+#| warning: false
+library(lme4)
+library(tidyverse)
+library(AICcmodavg)
+library(gtsummary)
+library(dplyr)
+library(e1071)
+```
+
+```{r}
+# read data
+demo1 <- read.csv("./STARD Demo 1.csv")
+demo2 <- read.csv("./STARD Demo 2.csv")
+starQids <- read.csv("./STARD QIDS.csv")
+```
+
+# Part I
+
+## a)
+
+```{r}
+# merge demograph datasets
+demo <- merge(demo1, demo2, by = "ID")
+```
+
+```{r}
+# clean data
+colMeans(is.na(demo))
+d2 <- demo[complete.cases(demo),]
+colMeans(is.na(d2))
+colMeans(is.na(starQids))
+sq <- starQids[complete.cases(starQids),]
+colMeans(is.na(sq))
+
+```
+
+## b)
+
+```{r}
+# remove anything with .x
+qids.3 <- starQids[-grep("\\.", starQids$WEEK), ]
+
+# count of subjects in qids.3
+length(unique(qids.3$ID))
+
+# Get maximum week per subject
+max_weeks <- aggregate(WEEK ~ ID, data = qids.3, max)
+
+# Convert max week to number of visits
+max_weeks$Visits <- (max_weeks$WEEK / 2) + 1
+
+# Filter subjects with at least 3 visits
+qids.3 <- qids.3[qids.3$ID %in% max_weeks$ID[max_weeks$Visits >= 3], ]
+
+# Create Table 1: Count of subjects by number of visits
+table_1 <- table(max_weeks$Visits[max_weeks$Visits >= 3])
+table_1
+
+# count of subjects in qids.3 after filtering subjects with >=3 visits
+length(unique(qids.3$ID))
+```
+
+## c)
+
+```{r}
+# Create a vector of unique IDs from QIDS.3
+valid_ids <- unique(qids.3$ID)
+
+# Filter the demo dataset to include only these subjects
+demo_filtered <- demo %>% filter(ID %in% valid_ids)
+
+# Check sample size
+length(unique(demo_filtered$ID))
+
+# Sample size is one less than qids.3
+
+# Check for IDs in QIDS.3 that are missing in demo_filtered
+#missing_in_demo <- setdiff(unique(qids.3$ID), demo_filtered$ID)
+#missing_in_demo
+
+#Turns out ID 2172 is missing in the demo dataset so we remove it from our dataset
+
+
+# Replace invalid values (-5 for categorical, <0 for numeric)
+demo_filtered <- demo_filtered %>% filter(ID != 2172)
+
+# Replace both -3 and -5 with NA for variables where these values represent missing/invalid data
+demo_filtered$DEP[demo_filtered$DEP == -3 | demo_filtered$DEP == -5] <- NA
+demo_filtered$BIP[demo_filtered$BIP == -3 | demo_filtered$BIP == -5] <- NA
+demo_filtered$ALCOHOL[demo_filtered$ALCOHOL == -3 | demo_filtered$ALCOHOL == -5] <- NA
+demo_filtered$DRUG_PHX[demo_filtered$DRUG_PHX == -3 | demo_filtered$DRUG_PHX == -5] <- NA
+demo_filtered$SUIC_PHX[demo_filtered$SUIC_PHX == -3 | demo_filtered$SUIC_PHX == -5] <- NA
+
+# Replace all negative values with NA for epino, episode_date and dage
+demo_filtered$HSPNC[demo_filtered$HSPNC < 0] <- NA
+demo_filtered$epino[demo_filtered$epino < 0] <- NA
+demo_filtered$dage[demo_filtered$dage < 0] <- NA
+
+
+# Since all episode_date values are negative, we will make them positive
+demo_filtered$episode_date <- abs(demo_filtered$episode_date)
+```
+
+```{r}
+# Histogram of 'dage'
+ggplot(demo_filtered, aes(x = dage)) + 
+  geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+  labs(title = "Histogram of Age (dage)", x = "Age", y = "Frequency")
+
+# Histogram of 'epino'
+ggplot(demo_filtered, aes(x = epino)) + 
+  geom_histogram(bins = 30, fill = "green", alpha = 0.7) +
+  labs(title = "Histogram of Episodes (epino)", x = "Number of Episodes", y = "Frequency")
+
+# Histogram of 'episode_date'
+ggplot(demo_filtered, aes(x = episode_date)) + 
+  geom_histogram(bins = 30, fill = "blue", alpha = 0.7) + 
+  labs(title = "Distribution of Episode Date", x = "Episode Date", y = "Frequency")
+
+
+# Calculate skewness while ignoring NAs
+skewness(demo_filtered$dage, na.rm = TRUE)
+skewness(demo_filtered$epino, na.rm = TRUE)
+skewness(demo_filtered$episode_date, na.rm = TRUE)
+
+```
+
+```{r}
+# Classify race categories # THIS NEEDS TO BE SPECIFIED IN THE REPORT
+demo_filtered <- demo_filtered %>%
+  mutate(
+    # White race classification
+    Race_White = ifelse(WHITE == 1, "White", NA),
+    
+    # Black race classification
+    Race_Black = ifelse(BLACK == 1 & !(WHITE == 1), "Black", NA),
+    
+    # Asian race classification, only for those who did not select Black
+    Race_Asian = ifelse(ASIAN == 1 & !(WHITE == 1 | BLACK == 1), "Asian", NA),
+    
+    # Other race classification: for subjects who did not select White, Black, or Asian
+    Race_Other = ifelse(
+      (HSPNC == 1 | AMIND == 1 | HAWAI == 1) & !(WHITE == 1 | BLACK == 1 | ASIAN == 1),
+      "Other",
+      NA
+    )
+  )
+
+# Summary for continuous variables (Median and IQR for skewed data)
+summary_continuous <- demo_filtered %>%
+  summarise(
+    dage_median = median(dage, na.rm = TRUE),
+    dage_IQR = IQR(dage, na.rm = TRUE),
+    episode_date_median = median(episode_date, na.rm = TRUE),
+    episode_date_IQR = IQR(episode_date, na.rm = TRUE),
+    epino_median = median(epino, na.rm = TRUE),
+    epino_IQR = IQR(epino, na.rm = TRUE)
+  )
+
+# Summary for categorical variables (N and percentages for each category)
+summary_categorical <- demo_filtered %>%
+  summarise(
+    SEX_Female_n = sum(SEX == 2, na.rm = TRUE),  # Count for Female
+    SEX_Female_pct = sum(SEX == 2, na.rm = TRUE) / n() * 100,  # Percentage for Female
+    SEX_Male_n = sum(SEX == 1, na.rm = TRUE),  # Count for Male
+    SEX_Male_pct = sum(SEX == 1, na.rm = TRUE) / n() * 100,  # Percentage for Male
+
+    DEP_No_n = sum(DEP == 0, na.rm = TRUE),  # Count for No depression history
+    DEP_No_pct = sum(DEP == 0, na.rm = TRUE) / n() * 100,  # Percentage for No depression history
+    DEP_Yes_n = sum(DEP == 1, na.rm = TRUE),  # Count for Yes depression history
+    DEP_Yes_pct = sum(DEP == 1, na.rm = TRUE) / n() * 100,  # Percentage for Yes depression history
+
+    ALCOHOL_No_n = sum(ALCOHOL == 0, na.rm = TRUE),  # Count for No alcohol use
+    ALCOHOL_No_pct = sum(ALCOHOL == 0, na.rm = TRUE) / n() * 100,  # Percentage for No alcohol use
+    ALCOHOL_Yes_n = sum(ALCOHOL == 1, na.rm = TRUE),  # Count for Yes alcohol use
+    ALCOHOL_Yes_pct = sum(ALCOHOL == 1, na.rm = TRUE) / n() * 100,  # Percentage for Yes alcohol use
+
+    DRUG_PHX_No_n = sum(DRUG_PHX == 0, na.rm = TRUE),  # Count for No drug use
+    DRUG_PHX_No_pct = sum(DRUG_PHX == 0, na.rm = TRUE) / n() * 100,  # Percentage for No drug use
+    DRUG_PHX_Yes_n = sum(DRUG_PHX == 1, na.rm = TRUE),  # Count for Yes drug use
+    DRUG_PHX_Yes_pct = sum(DRUG_PHX == 1, na.rm = TRUE) / n() * 100,  # Percentage for Yes drug use
+
+    SUIC_PHX_No_n = sum(SUIC_PHX == 0, na.rm = TRUE),  # Count for No suicidal history
+    SUIC_PHX_No_pct = sum(SUIC_PHX == 0, na.rm = TRUE) / n() * 100,  # Percentage for No suicidal history
+    SUIC_PHX_Yes_n = sum(SUIC_PHX == 1, na.rm = TRUE),  # Count for Yes suicidal history
+    SUIC_PHX_Yes_pct = sum(SUIC_PHX == 1, na.rm = TRUE) / n() * 100,  # Percentage for Yes suicidal history
+
+    # Race Summary
+    Race_White_n = sum(Race_White == "White", na.rm = TRUE),  # Count for White
+    Race_White_pct = sum(Race_White == "White", na.rm = TRUE) / n() * 100,  # Percentage for White
+
+    Race_Black_n = sum(Race_Black == "Black", na.rm = TRUE),  # Count for Black
+    Race_Black_pct = sum(Race_Black == "Black", na.rm = TRUE) / n() * 100,  # Percentage for Black
+
+    Race_Asian_n = sum(Race_Asian == "Asian", na.rm = TRUE),  # Count for Asian
+    Race_Asian_pct = sum(Race_Asian == "Asian", na.rm = TRUE) / n() * 100,  # Percentage for Asian
+
+    Race_Other_n = sum(Race_Other == "Other", na.rm = TRUE),  # Count for Other
+    Race_Other_pct = sum(Race_Other == "Other", na.rm = TRUE) / n() * 100  # Percentage for Other
+  )
+
+# Combine continuous and categorical summaries into a final table
+summary_table <- bind_cols(summary_continuous, summary_categorical)
+
+
+print(summary_table)
+
+
+### This table can be used to make a nicer table in word/pdf for the report. Look at the STARD paper for inspo. page 4 of 13.
+
+```
+
+## d)
+
+In this analysis, subjects were allowed to select multiple races, and it was necessary to classify them into broader categories for reporting purposes. The following classification rules were applied to categorize race:
+
+1.  **White**: Subjects who identified as **White** were classified as **White**.
+2.  **Black**: Subjects who identified as **Black** and did **not** identify as **White** were classified as **Black**. This ensures that individuals who selected both **White** and **Black** are not mistakenly categorized as **Black**.
+3.  **Asian**: Subjects who identified as **Asian** and did **not** identify as either **Black** or **White** were classified as **Asian**.
+4.  **Other**: Subjects who selected races such as **Hispanic**, **AMIND**, or **HAWAI**, and did **not** select **White**, **Black**, or **Asian**, were classified as **Other**.
+
+This classification approach ensures that individuals who selected multiple races are categorized based on their most specific race (e.g., **Black** if **Black** and **White** were selected). Additionally, the **Other** category includes subjects who selected races outside the main classifications, ensuring that their race is still represented in the dataset without misclassification.
+
+## e)
+
+```{r}
+# Create the new composite variable 'Any.Fam.Psyc.Hist'
+demo_filtered <- demo_filtered %>%
+  mutate(
+    Any_Fam_Psyc_Hist = ifelse(DEP == 1 | BIP == 1 | ALCOHOL == 1 | DRUG_PHX == 1 | SUIC_PHX == 1, 1, 0)
+  )
+
+```
+
+# Part II
+
+## a)
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+set.seed(111)
+
+# Randomly select 100 unique subjects
+rand_ids <- sample(unique(starQids$ID), size = 100, replace = FALSE)
+
+# Filter dataset to only include the selected subjects
+rand_samp <- starQids %>% filter(ID %in% rand_ids)
+
+# Create the spaghetti plot
+g1 <- ggplot(data = rand_samp, aes(x = WEEK, y = QSTOT, group = ID, color = factor(ID))) +
+  geom_line(alpha = 0.5) +  # Reduce opacity for clarity
+  scale_y_continuous(name = "QIDS Score") +
+  scale_x_continuous(name = "Week") +
+  labs(title = "Spaghetti Plot of QIDS Scores Over Time", color = "Subject ID") +
+  theme_bw() +  # Use a clean theme
+  theme(legend.position = "none")  # Hide legend for readability
+
+# Print the plot
+print(g1)
+
+```
+
+## b)
+
+```{r}
+
+# Jitter week variable
+starQids$jweek <- jitter(starQids$WEEK)
+
+# Create the loess curve plot
+g_loess <- ggplot(data = starQids, aes(x = jweek, y = QSTOT)) +
+  geom_jitter(alpha = 0.3, color = "blue") +  # Jittered points for visibility
+  scale_y_continuous(name = "QIDS Score") +
+  scale_x_continuous(name = "Week", breaks = 0:16) +
+  stat_smooth(method = "loess", se = FALSE, color = "red", size = 1.2) +  # Loess smoothing
+  labs(title = "Loess Curve of QIDS Scores Across All Subjects") +
+  theme_minimal()
+
+# Print the plot
+print(g_loess)
+
+
+```
+
+## c)
+
+```{r}
+# Merge gender info with QIDS dataset
+sub_cols <- demo_filtered[, c("SEX", "ID")]
+sq_gen <- merge(x = starQids, y = sub_cols, by = "ID")
+
+# Check for missing values
+colSums(is.na(sq_gen))
+
+# Jitter week values for better visualization
+sq_gen$jweek <- jitter(sq_gen$WEEK)
+
+# Create faceted plot by gender
+g_gender <- ggplot(data = sq_gen, aes(x = jweek, y = QSTOT, color = factor(SEX))) +
+  geom_jitter(alpha = 0.3) +  # Add jitter for better visibility
+  scale_y_continuous(name = "QIDS Score") +
+  scale_x_continuous(name = "Week", breaks = 0:16) +
+  stat_smooth(method = "loess", se = FALSE, size = 1.2) +  # Loess curve for each facet
+  facet_wrap(~SEX, labeller = labeller(SEX = c("1" = "Male", "2" = "Female"))) +  
+  labs(title = "QIDS Scores Over Time by Gender", color = "Gender") +
+  theme_minimal()
+
+# Print the plot
+print(g_gender)
+
+```
+
+## d)
+
+```{r}
+# Create a single Race_Collapsed variable
+demo_filtered <- demo_filtered %>%
+  mutate(
+    Race_Collapsed = case_when(
+      Race_White == "White" ~ "White",
+      Race_Black == "Black" ~ "Black",
+      Race_Asian == "Asian" ~ "Asian",
+      Race_Other == "Other" ~ "Other",
+      TRUE ~ NA_character_  # Assign NA for any missing values
+    )
+  )
+
+# Merge race info with QIDS dataset
+sub_eth <- demo_filtered[, c("ID", "Race_Collapsed")]
+sq_eth <- merge(starQids, sub_eth, by = "ID")
+
+# Jitter week values for better visualization
+sq_eth$jweek <- jitter(sq_eth$WEEK)
+
+# Create faceted plot by ethnicity
+g_ethn <- ggplot(data = sq_eth, aes(x = jweek, y = QSTOT, color = factor(Race_Collapsed))) +
+  geom_jitter(alpha = 0.3) +  # Reduce overplotting
+  scale_y_continuous(name = "QIDS Score") +
+  scale_x_continuous(name = "Week", breaks = 0:16) +
+  stat_smooth(method = "loess", se = FALSE, size = 1.2) +  # Add loess curve for each category
+  facet_wrap(~Race_Collapsed) +  
+  labs(title = "QIDS Scores Over Time by Ethnicity", color = "Ethnicity") +
+  theme_minimal()
+
+print(g_ethn)
+
+
+```
+
+## e)
+
+```{r}
+# Merge 'epino' data with QIDS dataset
+sub_episodes <- demo_filtered[, c("ID", "epino")]
+sq_epi <- merge(starQids, sub_episodes, by = "ID")
+
+# Ensure 'epino' has valid values before binning
+sq_epi <- sq_epi %>% filter(!is.na(epino))  # Remove NAs if needed
+
+# Bin 'epino' into 3 groups using cut_number
+sq_epi$epi2 <- cut_number(sq_epi$epino, n = 3, labels = c("Low", "Medium", "High"))
+
+# Create faceted plot by episode binning
+g_episode <- ggplot(data = sq_epi, aes(x = WEEK, y = QSTOT)) +
+  geom_jitter(alpha = 0.3, color = "blue") +  # Add jitter for better visualization
+  scale_y_continuous(name = "QIDS Score") +
+  scale_x_continuous(name = "Week", breaks = 0:16) +
+  stat_smooth(method = "loess", se = FALSE, color = "red", size = 1.2) +  # Loess curve
+  facet_wrap(~epi2) +  # Facet by episode binning
+  labs(title = "QIDS Scores Over Time by Episode Count", x = "Week", y = "QIDS Score") +
+  theme_minimal()
+
+print(g_episode)
+
+```
+
+## f)
+
+```{r}
+
+# Merge gender (`SEX`) with episode-binned data (`sq_epi`)
+sq_epi_sex <- merge(sq_epi, sub_cols, by = "ID")
+
+# Check for missing values
+colSums(is.na(sq_epi_sex))
+
+# Create faceted plot by gender with separate loess curves for each episode bin
+g_gender_epi <- ggplot(data = sq_epi_sex, aes(x = WEEK, y = QSTOT, color = epi2)) +
+  geom_jitter(alpha = 0.3) +  # Reduce overplotting
+  scale_y_continuous(name = "QIDS Score") +
+  scale_x_continuous(name = "Week", breaks = 0:16) +
+  stat_smooth(method = "loess", se = FALSE, size = 1) +  # Loess curve for each bin
+  facet_wrap(. ~ SEX, labeller = labeller(SEX = c("1" = "Male", "2" = "Female"))) +  # Gender labels
+  labs(
+    title = "QIDS Scores Over Time by Gender & Episode Count",
+    color = "Episode Bins"
+  ) +
+  theme_minimal()
+
+# Print the plot
+print(g_gender_epi)
+
+
+```
+
+# Part III
+
+## a)
+
+```{r}
+full_data <- merge(sq, demo_filtered, by="ID")
+lmer.1 <- lmer(QSTOT ~ 1 + WEEK + (1 + WEEK | ID), 
+               data = full_data, 
+               REML = F,
+               control = lmerControl(optimizer = "Nelder_Mead"))
+summary(lmer.1)
+```
+
+You can use this for the report:
+
+**Interpreting Your Model Output (`lmer.1`)**
+
+**Key results:** - **Fixed Effects:** - **Intercept (13.54)** → The estimated **QIDS score at Week 0** is **13.54**. - **WEEK (-0.59)** → On average, **QIDS scores decrease by 0.59 per week**. - **t-value for WEEK (-70.57)** is large, meaning **WEEK has a strong effect**.
+
+-   **Random Effects:**
+    -   **Intercept variance (12.31, SD = 3.51)** → Some subjects start with much higher or lower QIDS scores.
+    -   **Slope variance for WEEK (0.078, SD = 0.28)** → Subjects vary slightly in their rate of improvement.
+    -   **Residual variance (10.85, SD = 3.29)** → This represents within-subject variation in QIDS scores.
+    -   **Intercept-Slope Correlation (0.02)** → Essentially **no correlation** between baseline QIDS score and rate of improvement.
+-   **Model Fit:**
+    -   **AIC = 93562.5, BIC = 93608.8** → These will be used to compare with the expanded model.
+
+# b)
+
+```{r}
+full_data$Race_Collapsed <- as.factor(full_data$Race_Collapsed)
+
+lmer.2 <- lmer(QSTOT ~ 1 + WEEK + SEX + Race_Collapsed + dage + epino + Any_Fam_Psyc_Hist + (1 + WEEK | ID), 
+               data = full_data, 
+               REML = F,
+               control = lmerControl(optimizer = "Nelder_Mead"))
+summary(lmer.2)
+```
+
+You can use this for the report:
+
+**Model Summary**: - **Fixed Effects:** - **Intercept (10.65)**: This is the estimated **QIDS score** at **Week 0** (baseline).\
+- **WEEK (-0.60)**: On average, the **QIDS score decreases by 0.60 per week**, suggesting that depression severity decreases over time. - **SEX (0.53)**: Males have **0.53 higher QIDS scores** than females, on average. - **Race_Collapsed**:\
+- **Black (3.37)**: Black subjects tend to have **3.37 higher QIDS scores** than the reference category (likely "White").\
+- **Other (3.89)**: Subjects from other racial backgrounds tend to have **3.89 higher QIDS scores** than the reference category.\
+- **White (1.81)**: White subjects tend to have **1.81 higher QIDS scores** compared to the reference group. - **dage (-0.01)**: For every one-year increase in **age**, the **QIDS score decreases slightly by 0.01**. - **epino (0.01)**: **Epilepsy history** has a **small positive effect** on QIDS scores, but it’s not significant at the conventional threshold (t value = 1.24).\
+- **Any_Fam_Psyc_Hist (0.21)**: Family psychiatric history is positively associated with **QIDS score**, but not statistically significant at the conventional threshold (t value = 1.29).
+
+-   **Random Effects**:
+    -   **Intercept Variance (11.81, SD = 3.44)**: There is **substantial variability** in baseline QIDS scores across subjects.\
+    -   **Slope Variance for WEEK (0.08, SD = 0.28)**: The rate of change in QIDS scores varies moderately between subjects.
+    -   **Residual Variance (10.85, SD = 3.29)**: There is still considerable unexplained variability within subjects.
+-   **Correlation of Fixed Effects**:
+    -   **Correlation between SEX and Race_Collapsed** is somewhat negative, which may suggest that gender and race have some correlation, but it's **not very strong**.
+    -   The **correlation between `dage` and other predictors** is relatively small, indicating little to no collinearity issues.
+
+### **Key Takeaways:**
+
+1.  **WEEK has a strong negative effect** on QIDS scores, meaning participants' depression symptoms decrease over time.
+2.  **Race** appears to have a large effect on QIDS scores, with subjects in the **Other** and **Black** categories showing **higher QIDS scores** on average compared to the reference group.
+3.  **No meaningful correlation** between baseline QIDS scores and rate of change over time (random intercept and slope correlation is near 0).
+4.  **Family psychiatric history (Any_Fam_Psyc_Hist)** does not show a statistically significant effect on QIDS scores.
+
+### **Comparison of Model Fit (lmer.1 vs. lmer.2)**
+
+#### **Model 1 (lmer.1)**:
+
+-   **AIC**: 93,562.5\
+-   **BIC**: 93,608.8\
+-   **logLik**: -46,775.3\
+-   **Deviance**: 93,550.5\
+-   **Residual Variance (Std. Dev.)**: 10.85 (3.29)
+
+#### **Model 2 (lmer.2)**:
+
+-   **AIC**: 80,513.3\
+-   **BIC**: 80,611.6\
+-   **logLik**: -40,243.7\
+-   **Deviance**: 80,487.3\
+-   **Residual Variance (Std. Dev.)**: 10.75 (3.28)
+
+------------------------------------------------------------------------
+
+### **Interpretation:**
+
+1.  **AIC** and **BIC**:
+    -   **lmer.2** has a significantly **lower AIC (80,513.3)** and **BIC (80,611.6)** compared to **lmer.1** (AIC = 93,562.5 and BIC = 93,608.8).\
+    -   A lower AIC and BIC indicate **better model fit** in **lmer.2** after including the additional predictors.
+2.  **logLik**:
+    -   The **log-likelihood** of **lmer.2 (-40,243.7)** is also higher than **lmer.1 (-46,775.3)**, suggesting that the additional predictors in **lmer.2** improve the fit by explaining more variation in the data.
+3.  **Residual Variance**:
+    -   The residual variance in **lmer.2** (10.75) is slightly lower than **lmer.1** (10.85), suggesting that **lmer.2** accounts for more of the unexplained variance.
+
+### **Conclusion**:
+
+-   The **inclusion of additional predictors (SEX, Race_Collapsed, dage, epino, Any.Fam.Psyc.Hist)** in **lmer.2** improves the model fit, as evidenced by the **lower AIC, BIC**, and **higher log-likelihood**.
+-   This suggests that **these predictors** are likely **meaningful** in explaining variation in **QIDS scores** over time.
+
+# c)
+
+```{r}
+
+full_data <- full_data %>%
+  mutate(
+    dage_scaled = scale(dage),
+    epino_scaled = scale(epino),
+    episode_date_scaled = scale(episode_date),
+    Total_Fam_Psyc_His = DEP + DRUG_PHX + SUIC_PHX + BIP + ALCOHOL
+  )
+
+lmer.3 <- lmer(QSTOT ~ 1 + WEEK + Total_Fam_Psyc_His +  
+                  dage_scaled + epino_scaled + Race_Collapsed + episode_date_scaled + 
+                  (1 + WEEK | ID), 
+               data = full_data, 
+               REML = F,
+               control = lmerControl(optimizer = "Nelder_Mead"))
+summary(lmer.3)
+
+```
+
+# Part IV
+
+## a)
+
+```{r}
+mynames <- paste("M", as.character(1:3), sep = "")
+mymodels <- list(lmer.1, lmer.2, lmer.3)
+myaicc <- as.data.frame(aictab(cand.set = mymodels, 
+                               modnames = mynames,
+                               sort = FALSE)[,-c(5,7)])
+
+myaicc$Eratio <- max(myaicc$AICcWt) / myaicc$AICcWt
+
+data.frame(Modnames = myaicc$Modnames, round(myaicc[,-1], 2))
+
+```
+
+**Comparison of Model Fit:**
+
+**Model 1: lmer.2**
+- **AIC**: 80,513.3  
+- **BIC**: 80,611.6  
+- **logLik**: -40,243.7  
+- **Deviance**: 80,487.3  
+- **Residual Variance (SD)**: 10.75 (3.28)  
+
+**Model 2: lmer.3**
+- **AIC**: 80,240.7  
+- **BIC**: 80,338.9  
+- **logLik**: -40,107.4  
+- **Deviance**: 80,214.7  
+- **Residual Variance (SD)**: 10.76 (3.28)
+
+**Key Insights:**
+
+1. **AIC and BIC**:
+   - **`lmer.3` has a lower AIC (80,240.7) and BIC (80,338.9)** compared to **`lmer.2` (AIC = 80,513.3, BIC = 80,611.6)**. This suggests that **`lmer.3`** provides a **better fit** to the data, as both AIC and BIC are lower.
+
+2. **logLik**:
+   - **`lmer.3` has a higher log-likelihood (-40,107.4)** compared to **`lmer.2` (-40,243.7)**. This indicates that **`lmer.3`** explains more variance in the data.
+
+3. **Residual Variance**:
+   - **Residual variance is almost identical** between the two models (10.75 vs. 10.76), suggesting that **`lmer.3`** does not introduce significant extra variability compared to **`lmer.2`**.
+
+---
+
+**Conclusion:**
+- **`lmer.3` is the more plausible model** based on the lower AIC, BIC, and higher log-likelihood, suggesting that the inclusion of **`Total_Fam_Psyc_His`** as a composite variable improves the model fit without significantly increasing the residual variance.
+
+
+1. **Extract Fitted Values for `lmer.3`:**
+```{r}
+
+# I was unable to get the fitted values due to missing values so I had to do the following:
+
+full_data_complete <- full_data[complete.cases(full_data[, c("SEX", "Race_Collapsed", "dage_scaled", "epino_scaled", 
+                                                             "Total_Fam_Psyc_His", "episode_date_scaled")]), ]
+
+lmer.3 <- lmer(QSTOT ~ 1 + WEEK + Total_Fam_Psyc_His +  
+                  dage_scaled + epino_scaled + Race_Collapsed + episode_date_scaled + 
+                  (1 + WEEK | ID), 
+               data = full_data_complete, 
+               REML = F,
+               control = lmerControl(optimizer = "Nelder_Mead"))
+
+full_data_complete$fitted_values <- fitted(lmer.3)
+
+
+```
+
+
+2. **Select a Random Sample of 25 Subjects:**
+
+```{r}
+set.seed(111)
+random_sample_ids <- sample(unique(full_data_complete$ID), 25)
+subset_data <- full_data_complete %>%
+  filter(ID %in% random_sample_ids)
+
+```
+
+
+3. **Create the Plot:**
+
+```{r}
+ggplot(subset_data, aes(x = WEEK, y = QSTOT, group = ID)) +
+  geom_point(color = "blue", alpha = 0.5) +  # Raw data points
+  geom_line(aes(y = fitted_values), color = "red", size = 1) +  # Predicted values
+  facet_wrap(~ID, scales = "free_y") +  # One panel per subject
+  labs(title = "Observed vs. Predicted QIDS Scores by Subject",
+       x = "Week",
+       y = "QIDS Score") +
+  theme_minimal()
+```
+
+
