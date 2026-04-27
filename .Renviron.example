@@ -1,0 +1,4 @@
+# Placeholder paths only. Copy this file to .Renviron and update locally.
+STARD_DEMO1_CSV=./STARD Demo 1.csv
+STARD_DEMO2_CSV=./STARD Demo 2.csv
+STARD_QIDS_CSV=./STARD QIDS.csv
