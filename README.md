@@ -20,7 +20,7 @@ The project uses course-provided STAR*D demographic and QIDS files:
 - `STARD Demo 2.csv`
 - `STARD QIDS.csv`
 
-The raw CSV files are not committed. Place them in the repository root or update the source paths before rendering.
+The raw STAR*D files are confidential/restricted and are intentionally not committed to this public repository. The rendered report and source workflow are included so employers can review the modeling approach, but only authorized users with access to the STAR*D files can rerun the analysis.
 
 ## Methods and Tools
 - Quarto
@@ -30,7 +30,7 @@ The raw CSV files are not committed. Place them in the repository root or update
 ## How to Run Locally
 1. Install R and Quarto.
 2. Copy `.Renviron.example` to `.Renviron` if you want to track local data paths.
-3. Add the STAR*D CSV files to the repository root, matching the filenames above.
+3. If you are authorized to use the STAR*D data, add the CSV files to the repository root, matching the filenames above.
 4. Render the report:
 
 ```bash
@@ -67,7 +67,8 @@ Screenshots are not committed yet. Suggested additions:
 - `screenshots/observed-vs-predicted-qids.png`
 
 ## Limitations
-- Raw STAR*D CSV files are not committed.
+- Raw STAR*D CSV files are confidential/restricted and are not committed.
+- Public reviewers can inspect the rendered report and source code, but cannot rerun the analysis without authorized data access.
 - Some interpretation text remains embedded in the Quarto report rather than summarized in separate documentation.
 - The analysis uses complete-case filtering for selected modeling variables, which may affect generalizability.
 
